@@ -173,6 +173,8 @@ fn classify_query_keywords(query: &str) -> QueryMode {
 
     if q.contains("current") || q.contains("latest") || q.contains("most recent")
         || q.contains("right now") || q.contains("updated")
+        || q.contains("today") || q.contains("as of")
+        || q.contains("changed to") || q.contains("new value")
         || (q.contains("now") && !q.contains("know"))
     {
         return QueryMode::Recency;
@@ -257,8 +259,12 @@ impl ReadEngine {
     /// Compute a recency score for a note using exponential decay.
     /// Returns 1.0 for brand new notes, decaying toward 0.0 for old notes.
     fn recency_score(&self, note: &MemoryNote) -> f32 {
+        // Use source_timestamp (real conversation time) if available,
+        // then created_at. Never updated_at — that reflects ingestion/evolution,
+        // not when the information was actually produced.
+        let reference_time = note.source_timestamp.unwrap_or(note.created_at);
         let age_days = Utc::now()
-            .signed_duration_since(note.updated_at)
+            .signed_duration_since(reference_time)
             .num_seconds() as f64
             / 86400.0;
 
@@ -405,6 +411,18 @@ impl ReadEngine {
         } else {
             let direct = self.vector_store.find_similar(&query_embedding, fetch_k, &[]).await?;
             (direct, Vec::new())
+        };
+
+        // --- Hybrid keyword search ---
+        // Extract query terms and find notes by keyword overlap.
+        // Bridges the vocabulary gap where embeddings miss lexical matches.
+        let query_terms: Vec<&str> = query.split_whitespace()
+            .filter(|w| w.len() > 2)
+            .collect();
+        let keyword_hits = if !query_terms.is_empty() {
+            self.vector_store.find_by_keywords(&query_terms, fetch_k / 2, &[]).await?
+        } else {
+            Vec::new()
         };
 
         // Collect active foresight source note IDs for boosting
@@ -564,7 +582,7 @@ impl ReadEngine {
 
         let fact_boost = self.config.fact_match_boost;
         for (fact, score) in &fact_hits {
-            if *score < 0.3 { continue; }
+            if *score < self.config.fact_min_score { continue; }
             if seen_note_ids.insert(fact.source_note_id.clone()) {
                 if let Ok(Some(parent)) = self.vector_store.get(&fact.source_note_id).await {
                     if parent.is_active() {
@@ -688,13 +706,35 @@ impl ReadEngine {
             }
         }
 
-        // Merge: profiles → structurally matched digests → linked digests → episode-drilled → fact-expanded → flat hits
+        // --- Keyword search results ---
+        // Inject keyword-matched notes not already seen from other paths.
+        let mut keyword_results: Vec<SearchResult> = Vec::new();
+        for (note, overlap) in keyword_hits {
+            if seen_note_ids.insert(note.id.clone()) {
+                // Normalize overlap score: diminishing returns past 3 matches
+                let kw_score = (overlap / 3.0).min(1.0) * 0.6;
+                keyword_results.push(SearchResult {
+                    note,
+                    score: kw_score,
+                    linked_notes: Vec::new(),
+                });
+            }
+        }
+        if !keyword_results.is_empty() {
+            debug!(count = keyword_results.len(), "Keyword-matched notes");
+        }
+
+        // Merge all retrieval paths, then sort by score and truncate.
+        // Previous approach: fixed order with truncate starved flat ANN hits.
+        // Now: merge everything, sort globally by score, let the best results win.
         let mut results = profile_results;
         results.extend(digest_matched_results);
         results.extend(linked_digest_results);
         results.extend(episode_results);
         results.extend(fact_expanded);
+        results.extend(keyword_results);
         results.extend(flat_results);
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(top_k);
 
         // Update last_accessed_at for all returned notes (access tracking for forgetting)
@@ -717,7 +757,9 @@ impl ReadEngine {
     /// Search + deduplicate + synthesize an answer with provenance markers.
     /// Includes abstention calibration: if no notes are sufficiently relevant, abstains.
     pub async fn ask(&self, query: &str, top_k: usize) -> Result<AskResult> {
-        // Adaptive top-K based on query mode (keyword fallback; search() uses embedding classifier)
+        // Use keyword classifier for top-K scaling (cheap, deterministic).
+        // search() internally uses the embedding classifier for its own mode logic.
+        // This avoids an extra embed call and keeps ask() fast.
         let mode = classify_query_keywords(query);
         let effective_top_k = match mode {
             QueryMode::Breadth => top_k * self.config.summarization_top_k_multiplier,

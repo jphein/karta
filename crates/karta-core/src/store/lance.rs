@@ -513,6 +513,55 @@ impl crate::store::VectorStore for LanceVectorStore {
         Ok(count)
     }
 
+    async fn find_by_keywords(
+        &self,
+        terms: &[&str],
+        top_k: usize,
+        exclude_ids: &[&str],
+    ) -> Result<Vec<(MemoryNote, f32)>> {
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Scan all notes and score by keyword overlap.
+        // O(N) but fine for current scale; replace with FTS index when N > 10K.
+        let all = self.get_all().await?;
+        let exclude: std::collections::HashSet<&str> = exclude_ids.iter().copied().collect();
+        let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
+
+        let mut scored: Vec<(MemoryNote, f32)> = all
+            .into_iter()
+            .filter(|n| !exclude.contains(n.id.as_str()) && n.is_active())
+            .filter_map(|note| {
+                let mut overlap = 0u32;
+                for kw in &note.keywords {
+                    let kw_lower = kw.to_lowercase();
+                    for term in &terms_lower {
+                        if kw_lower.contains(term.as_str()) || term.contains(kw_lower.as_str()) {
+                            overlap += 1;
+                            break;
+                        }
+                    }
+                }
+                // Also check content for direct term matches
+                let content_lower = note.content.to_lowercase();
+                for term in &terms_lower {
+                    if content_lower.contains(term.as_str()) {
+                        overlap += 1;
+                    }
+                }
+                if overlap > 0 {
+                    Some((note, overlap as f32))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(top_k);
+        Ok(scored)
+    }
+
     // --- Atomic Facts ---
 
     async fn upsert_fact(&self, fact: &crate::note::AtomicFact) -> Result<()> {

@@ -279,7 +279,14 @@ impl WriteEngine {
         };
 
         if should_new_episode {
-            // Create new episode
+            // Create new episode — link to last note of previous episode if exists
+            if let Some(prev_ep) = current_episode {
+                if let Some(last_id) = prev_ep.note_ids.last() {
+                    self.graph_store
+                        .add_link(last_id, &note.id, "temporal: follows (cross-episode)")
+                        .await?;
+                }
+            }
             let mut episode = Episode::new(session_id.to_string());
             episode.note_ids.push(note.id.clone());
             episode.end_time = Utc::now();
@@ -302,7 +309,12 @@ impl WriteEngine {
 
             debug!(episode_id = %episode.id, session = session_id, "Created new episode");
         } else if let Some(ep) = current_episode {
-            // Extend existing episode
+            // Extend existing episode — add temporal chain link from previous note
+            if let Some(last_id) = ep.note_ids.last() {
+                self.graph_store
+                    .add_link(last_id, &note.id, "temporal: follows (in-episode)")
+                    .await?;
+            }
             self.graph_store
                 .add_note_to_episode(&note.id, &ep.id)
                 .await?;

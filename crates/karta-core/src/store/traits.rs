@@ -32,6 +32,15 @@ pub trait VectorStore: Send + Sync {
     /// Total note count.
     async fn count(&self) -> Result<usize>;
 
+    /// Find notes whose keywords overlap with the given terms.
+    /// Returns (note, overlap_count) sorted by overlap descending.
+    async fn find_by_keywords(
+        &self,
+        _terms: &[&str],
+        _top_k: usize,
+        _exclude_ids: &[&str],
+    ) -> Result<Vec<(MemoryNote, f32)>> { Ok(Vec::new()) }
+
     // --- Atomic Facts (Phase Next) ---
 
     /// Insert or update an atomic fact with its embedding.

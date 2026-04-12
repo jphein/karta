@@ -107,6 +107,8 @@ pub struct ReadConfig {
     pub foresight_boost: f32,
     /// Weight for graph connectivity (PageRank-lite). 0.0 = disabled.
     pub graph_weight: f32,
+    /// Minimum fact score to consider for fact-to-note expansion.
+    pub fact_min_score: f32,
     /// Max graph traversal depth (1 = current behavior, 2-3 = multi-hop).
     pub max_hop_depth: usize,
     /// Decay factor per hop (0.5 = each hop worth half the previous).
@@ -137,7 +139,8 @@ impl Default for ReadConfig {
             recency_weight: 0.15,
             recency_half_life_days: 30.0,
             foresight_boost: 0.1,
-            graph_weight: 0.05,
+            graph_weight: 0.0,
+            fact_min_score: 0.2,
             max_hop_depth: 2,
             hop_decay_factor: 0.5,
             abstention_threshold: 0.20,
