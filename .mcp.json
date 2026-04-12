@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "karta": {
+      "command": "/home/jp/Projects/karta/target/release/karta-cli",
+      "args": [],
+      "env": {}
+    }
+  }
+}
