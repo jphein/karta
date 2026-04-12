@@ -33,7 +33,11 @@ impl AzureResponsesProvider {
         embedding_deployment: &str,
     ) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(300))
+                .connect_timeout(Duration::from_secs(10))
+                .build()
+                .expect("failed to build HTTP client"),
             endpoint: endpoint.trim_end_matches('/').to_string(),
             api_key: api_key.to_string(),
             api_version: api_version.to_string(),
